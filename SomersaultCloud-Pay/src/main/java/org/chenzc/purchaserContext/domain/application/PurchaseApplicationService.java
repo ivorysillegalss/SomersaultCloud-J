@@ -2,9 +2,11 @@ package org.chenzc.purchaserContext.domain.application;
 
 import cn.hutool.core.util.IdUtil;
 import com.github.binarywang.wxpay.bean.notify.WxPayOrderNotifyResult;
+import com.github.binarywang.wxpay.bean.request.WxPayUnifiedOrderRequest;
 import com.github.binarywang.wxpay.bean.result.WxPayUnifiedOrderResult;
 import com.github.binarywang.wxpay.service.WxPayService;
 import jakarta.annotation.Resource;
+import org.apache.commons.lang3.StringUtils;
 import org.chenzc.archiveContext.domain.entity.Archive;
 import org.chenzc.archiveContext.domain.service.ArchiveService;
 import org.chenzc.common.constant.CommonConstant;
@@ -12,6 +14,7 @@ import org.chenzc.common.entity.BasicResult;
 import org.chenzc.common.enums.PurchaseEnums;
 import org.chenzc.common.utils.QrCodeUtil;
 import org.chenzc.purchaserContext.domain.api.dto.OrderDTO;
+import org.chenzc.purchaserContext.domain.entity.WxOrder;
 import org.chenzc.purchaserContext.domain.service.PurchaserService;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -49,7 +52,16 @@ public class PurchaseApplicationService {
 
 //        TODO 导入责任链
 
-        WxPayUnifiedOrderResult wxOrder = purchaserService.createWxOrder();
+        WxOrder order = WxOrder.builder()
+                .body("body")
+                .spbillCreateIp(orderDTO.ip)
+                .totalFee(CommonConstant.ORDER_FEE) // 金额 分
+                .tradeType("NATIVE")// 交易类型，NATIVE表示扫码支付
+                .notifyUrl("http://localhost:3001/wxpay/notify")  // 回调地址
+                .build();
+        order.setOutTradeNo(org.chenzc.purchaserContext.domain.util.IdUtil.generateOutTradeNo(order));
+
+        WxPayUnifiedOrderResult wxOrder = purchaserService.createWxOrder(order);
 
         Archive archive = Archive.builder()
                 .time(Long.valueOf(System.currentTimeMillis()).intValue())
@@ -58,10 +70,14 @@ public class PurchaseApplicationService {
                 .email(orderDTO.email)
                 .ip(orderDTO.ip)
                 .state(PurchaseEnums.CREATE_ORDER.getCode())
-//           TODO             .outTradeNo()   如何规定 ？  另外一种创建ID的方法？构建业务ID？
+                .outTradeNo(order.getOutTradeNo())
                 .build();
 
         archiveService.ArchivePayingLog(archive);
+
+//        TODO 保持幂等性 先用redis作为暴力解
+        redisTemplate.opsForSet().add(CommonConstant.WAIT_FOR_PAY_LIST,
+                StringUtils.join(CommonConstant.WAIT_FOR_PAY_LIST_PRE, CommonConstant.REGEX, order.getOutTradeNo()));
 
         if (Objects.isNull(wxOrder)) {
             return BasicResult.fail();
@@ -91,8 +107,12 @@ public class PurchaseApplicationService {
                 // 支付成功处理逻辑，如更新订单状态、记录支付信息等
                 String outTradeNo = notifyResult.getOutTradeNo();
                 String transactionId = notifyResult.getTransactionId();
-                // TODO: 处理支付成功后的业务逻辑 分配账号TBD
+                // TODO: 处理支付成功后的业务逻辑
+                //  调用Nacos rpc 分配账号TBD
 
+
+                redisTemplate.opsForSet().remove(CommonConstant.WAIT_FOR_PAY_LIST
+                        , StringUtils.join(CommonConstant.WAIT_FOR_PAY_LIST_PRE, CommonConstant.REGEX, outTradeNo));
 
                 // 返回成功结果给微信支付
                 return BasicResult.success();

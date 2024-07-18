@@ -1,8 +1,10 @@
 package org.chenzc.purchaserContext.domain.entity;
 
+import lombok.Builder;
 import lombok.Data;
 
 @Data
+@Builder
 public class WxOrder {
     /**
      * 商品描述
